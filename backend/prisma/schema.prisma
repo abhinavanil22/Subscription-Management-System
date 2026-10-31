@@ -1,0 +1,216 @@
+// Entity names are part of the SHARED CONTRACT. Statuses stored as strings; values live in /shared/constants.ts.
+// Money = Float for hackathon simplicity (TODO: Decimal/cents). SQLite now; for Postgres change provider only.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- MEMBER 1 ----------
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("CUSTOMER") // ADMIN | STAFF | CUSTOMER
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  customer     Customer?
+  resetTokens  PasswordResetToken[]
+}
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User     @relation(fields: [userId], references: [id])
+}
+model Customer {
+  id      String  @id @default(cuid())
+  userId  String? @unique
+  name    String
+  email   String
+  phone   String?
+  address String?
+  company String?
+  user          User? @relation(fields: [userId], references: [id])
+  subscriptions Subscription[]
+  invoices      Invoice[]
+  @@index([email])
+}
+model Product {
+  id         String  @id @default(cuid())
+  name       String
+  type       String
+  salesPrice Float
+  costPrice  Float
+  notes      String?
+  isActive   Boolean @default(true)
+  createdAt  DateTime @default(now())
+  variants   ProductVariant[]
+  @@index([name])
+}
+model ProductVariant {
+  id              String  @id @default(cuid())
+  productId       String
+  attribute       String  // e.g. "Brand"
+  value           String  // e.g. "Odoo"
+  priceAdjustment Float   @default(0) // e.g. 560
+  product Product @relation(fields: [productId], references: [id])
+  @@index([productId])
+}
+model Plan {
+  id          String   @id @default(cuid())
+  name        String
+  price       Float
+  frequency   String   // DAILY|WEEKLY|MONTHLY|YEARLY
+  minQuantity Int      @default(1)
+  availableFrom DateTime
+  availableTo   DateTime?
+  status      String   @default("ACTIVE") // ACTIVE|PAUSED|CLOSED
+  autoClose   Boolean  @default(false) // close automatically at availableTo
+  closable    Boolean  @default(true)
+  pausable    Boolean  @default(true)
+  renewable   Boolean  @default(true)
+  subscriptions Subscription[]
+  templates     QuotationTemplate[]
+}
+
+// ---------- MEMBER 2 ----------
+model QuotationTemplate {
+  id           String @id @default(cuid())
+  name         String
+  planId       String
+  validityDays Int    @default(30)
+  plan  Plan @relation(fields: [planId], references: [id])
+  lines QuotationTemplateLine[]
+}
+model QuotationTemplateLine {
+  id         String @id @default(cuid())
+  templateId String
+  productId  String
+  variantId  String?
+  quantity   Int    @default(1)
+  template QuotationTemplate @relation(fields: [templateId], references: [id])
+}
+// A quotation IS a subscription in status QUOTATION (one table, one lifecycle).
+model Subscription {
+  id            String   @id @default(cuid())
+  number        String   @unique // e.g. SUB-000001
+  customerId    String
+  planId        String
+  templateId    String?
+  status        String   @default("DRAFT")
+  startDate     DateTime
+  expiryDate    DateTime?
+  quotationValidUntil DateTime?
+  paymentTerms  String?  // e.g. "Net 15"
+  nextBillingDate DateTime?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  customer Customer @relation(fields: [customerId], references: [id])
+  plan     Plan     @relation(fields: [planId], references: [id])
+  lines    SubscriptionLine[]
+  invoices Invoice[]
+  discounts Discount[]
+  @@index([status])
+  @@index([customerId])
+  @@index([nextBillingDate])
+}
+model SubscriptionLine {
+  id             String @id @default(cuid())
+  subscriptionId String
+  productId      String
+  variantId      String?
+  quantity       Int
+  unitPrice      Float
+  taxId          String?
+  amount         Float  // quantity * unitPrice (pre-tax)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  tax          Tax? @relation(fields: [taxId], references: [id])
+  @@index([subscriptionId])
+}
+model Tax {
+  id        String  @id @default(cuid())
+  name      String
+  ratePercent Float
+  isActive  Boolean @default(true)
+  subscriptionLines SubscriptionLine[]
+  invoiceLines      InvoiceLine[]
+}
+model Discount {
+  id            String   @id @default(cuid())
+  name          String
+  type          String   // FIXED | PERCENTAGE
+  value         Float
+  scope         String   // PRODUCT | SUBSCRIPTION
+  productId     String?  // when scope = PRODUCT
+  subscriptionId String? // optional: limit to one subscription
+  minPurchase   Float?
+  minQuantity   Int?
+  startDate     DateTime
+  endDate       DateTime?
+  usageLimit    Int?
+  usedCount     Int      @default(0)
+  subscription  Subscription? @relation(fields: [subscriptionId], references: [id])
+  invoices      Invoice[]
+}
+model Invoice {
+  id             String   @id @default(cuid())
+  number         String   @unique // INV-000001
+  subscriptionId String
+  customerId     String
+  status         String   @default("DRAFT")
+  periodStart    DateTime // billing period -> duplicate-billing guard
+  periodEnd      DateTime
+  issueDate      DateTime @default(now())
+  dueDate        DateTime
+  subtotal       Float
+  discountAmount Float    @default(0)
+  discountId     String?
+  taxAmount      Float
+  total          Float
+  amountPaid     Float    @default(0)
+  createdAt      DateTime @default(now())
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  customer     Customer @relation(fields: [customerId], references: [id])
+  discount     Discount? @relation(fields: [discountId], references: [id])
+  lines        InvoiceLine[]
+  payments     Payment[]
+  @@unique([subscriptionId, periodStart]) // no double billing
+  @@index([status])
+  @@index([customerId])
+  @@index([dueDate])
+}
+model InvoiceLine {
+  id          String @id @default(cuid())
+  invoiceId   String
+  productId   String?
+  description String
+  quantity    Int
+  unitPrice   Float
+  taxId       String?
+  taxAmount   Float  @default(0)
+  amount      Float
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  tax     Tax?    @relation(fields: [taxId], references: [id])
+  @@index([invoiceId])
+}
+
+// ---------- MEMBER 3 ----------
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  method    String   // CASH|BANK_TRANSFER|CARD|UPI|OTHER
+  amount    Float
+  paidAt    DateTime
+  note      String?
+  recordedById String?
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  @@index([invoiceId])
+  @@index([paidAt])
+}
