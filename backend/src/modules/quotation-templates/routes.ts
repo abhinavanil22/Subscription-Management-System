@@ -1,7 +1,13 @@
+<<<<<<< Updated upstream
 
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+=======
+// OWNER: Member 2
+import { Router } from "express";
+import { z } from "zod";
+>>>>>>> Stashed changes
 import { prisma } from "../../db";
 import { requireAuth, requireRole } from "../../middleware/auth";
 import { badRequest, notFound } from "../../utils/errors";
@@ -10,6 +16,7 @@ import { ok, paging } from "../../utils/response";
 const r = Router();
 r.use(requireAuth);
 
+<<<<<<< Updated upstream
 const lineSchema = z.object({
   productId: z.string().min(1),
   variantId: z.string().min(1).optional().nullable(),
@@ -82,10 +89,45 @@ r.get("/", requireRole("ADMIN", "STAFF"), async (req, res) => {
   }
 
   const [templates, total] = await Promise.all([
+=======
+const lineInputSchema = z.object({
+  productId: z.string().min(1, "Product ID is required"),
+  variantId: z.string().optional().nullable(),
+  quantity: z.number().int().min(1).default(1),
+});
+
+const createTemplateSchema = z.object({
+  name: z.string().min(1, "Template name is required"),
+  planId: z.string().min(1, "Plan ID is required"),
+  validityDays: z.number().int().min(1).default(30),
+  lines: z.array(lineInputSchema).optional().default([]),
+});
+
+const updateTemplateSchema = z.object({
+  name: z.string().min(1).optional(),
+  planId: z.string().min(1).optional(),
+  validityDays: z.number().int().min(1).optional(),
+  lines: z.array(lineInputSchema).optional(),
+});
+
+// GET /quotation-templates (ADMIN, STAFF)
+r.get("/", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const { page, limit, skip, take } = paging(req.query);
+  const planId = typeof req.query.planId === "string" ? req.query.planId : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+
+  const where: any = {};
+  if (planId) where.planId = planId;
+  if (search) where.name = { contains: search };
+
+  const [total, data] = await Promise.all([
+    prisma.quotationTemplate.count({ where }),
+>>>>>>> Stashed changes
     prisma.quotationTemplate.findMany({
       where,
       skip,
       take,
+<<<<<<< Updated upstream
       include: {
         plan: true,
         lines: true
@@ -137,11 +179,58 @@ r.post("/", requireRole("ADMIN"), async (req, res) => {
 });
 
 // GET /api/v1/quotation-templates/:id
+=======
+      orderBy: { name: "asc" },
+      include: {
+        plan: true,
+        lines: true,
+      },
+    }),
+  ]);
+
+  ok(res, data, 200, { page, limit, total });
+});
+
+// POST /quotation-templates (ADMIN)
+r.post("/", requireRole("ADMIN"), async (req, res) => {
+  const body = createTemplateSchema.parse(req.body);
+
+  const plan = await prisma.plan.findUnique({ where: { id: body.planId } });
+  if (!plan) throw badRequest("Referenced plan does not exist");
+
+  const template = await prisma.$transaction(async (tx) => {
+    const created = await tx.quotationTemplate.create({
+      data: {
+        name: body.name.trim(),
+        planId: body.planId,
+        validityDays: body.validityDays,
+        lines: {
+          create: body.lines.map((l) => ({
+            productId: l.productId,
+            variantId: l.variantId ?? null,
+            quantity: l.quantity,
+          })),
+        },
+      },
+      include: {
+        plan: true,
+        lines: true,
+      },
+    });
+    return created;
+  });
+
+  ok(res, template, 201);
+});
+
+// GET /quotation-templates/:id (ADMIN, STAFF)
+>>>>>>> Stashed changes
 r.get("/:id", requireRole("ADMIN", "STAFF"), async (req, res) => {
   const template = await prisma.quotationTemplate.findUnique({
     where: { id: req.params.id },
     include: {
       plan: true,
+<<<<<<< Updated upstream
       lines: true
     }
   });
@@ -217,6 +306,61 @@ r.patch("/:id", requireRole("ADMIN"), async (req, res) => {
   });
 
   return ok(res, template);
+=======
+      lines: true,
+    },
+  });
+
+  if (!template) throw notFound("Quotation template not found");
+
+  ok(res, template);
+});
+
+// PATCH /quotation-templates/:id (ADMIN)
+r.patch("/:id", requireRole("ADMIN"), async (req, res) => {
+  const body = updateTemplateSchema.parse(req.body);
+
+  const existing = await prisma.quotationTemplate.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!existing) throw notFound("Quotation template not found");
+
+  if (body.planId) {
+    const plan = await prisma.plan.findUnique({ where: { id: body.planId } });
+    if (!plan) throw badRequest("Referenced plan does not exist");
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (body.lines) {
+      await tx.quotationTemplateLine.deleteMany({
+        where: { templateId: req.params.id },
+      });
+      await tx.quotationTemplateLine.createMany({
+        data: body.lines.map((l) => ({
+          templateId: req.params.id,
+          productId: l.productId,
+          variantId: l.variantId ?? null,
+          quantity: l.quantity,
+        })),
+      });
+    }
+
+    return tx.quotationTemplate.update({
+      where: { id: req.params.id },
+      data: {
+        ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(body.planId !== undefined ? { planId: body.planId } : {}),
+        ...(body.validityDays !== undefined ? { validityDays: body.validityDays } : {}),
+      },
+      include: {
+        plan: true,
+        lines: true,
+      },
+    });
+  });
+
+  ok(res, updated);
+>>>>>>> Stashed changes
 });
 
 export default r;

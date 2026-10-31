@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 
 import { Router, Request, Response, NextFunction } from "express";
 import { Prisma } from "@prisma/client";
@@ -826,5 +827,212 @@ r.get(
     }
   }
 );
+=======
+// OWNER: Member 2
+import { Router } from "express";
+import { prisma } from "../../db";
+import { requireAuth, requireRole } from "../../middleware/auth";
+import { badRequest, notFound } from "../../utils/errors";
+import { ok, paging } from "../../utils/response";
+import {
+  INVOICE_TRANSITIONS,
+  InvoiceStatus,
+} from "../../../../shared/constants";
+import { generateInvoiceForSubscription } from "../../utils/billing";
+
+const r = Router();
+r.use(requireAuth);
+
+// GET /invoices (ADMIN, STAFF)
+r.get("/", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const { page, limit, skip, take } = paging(req.query);
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const customerId = typeof req.query.customerId === "string" ? req.query.customerId : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+  const isOverdue = req.query.overdue === "true";
+
+  const now = new Date();
+  const where: any = {};
+  if (status) where.status = status;
+  if (customerId) where.customerId = customerId;
+  if (isOverdue) {
+    where.status = "CONFIRMED";
+    where.dueDate = { lt: now };
+  }
+  if (search) {
+    where.OR = [
+      { number: { contains: search } },
+      { customer: { name: { contains: search } } },
+      { customer: { email: { contains: search } } },
+    ];
+  }
+
+  const [total, data] = await Promise.all([
+    prisma.invoice.count({ where }),
+    prisma.invoice.findMany({
+      where,
+      skip,
+      take,
+      orderBy: { createdAt: "desc" },
+      include: {
+        customer: { select: { id: true, name: true, email: true, company: true } },
+        subscription: { select: { id: true, number: true, plan: { select: { name: true } } } },
+        lines: true,
+        payments: true,
+      },
+    }),
+  ]);
+
+  ok(res, data, 200, { page, limit, total });
+});
+
+// POST /invoices/generate-due (ADMIN, STAFF)
+r.post("/generate-due", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+
+  // Find due subscriptions
+  const dueSubscriptions = await prisma.subscription.findMany({
+    where: {
+      status: "ACTIVE",
+      nextBillingDate: {
+        lte: endOfToday,
+      },
+    },
+    select: { id: true, number: true },
+  });
+
+  const generatedInvoices = [];
+  let skippedCount = 0;
+
+  for (const sub of dueSubscriptions) {
+    try {
+      const invoice = await prisma.$transaction(async (tx) => {
+        return generateInvoiceForSubscription(tx as any, sub.id);
+      });
+      generatedInvoices.push(invoice);
+    } catch (err: any) {
+      // If already billed or duplicate period, gracefully skip
+      skippedCount++;
+    }
+  }
+
+  ok(res, {
+    generatedCount: generatedInvoices.length,
+    skippedCount,
+    invoices: generatedInvoices,
+  });
+});
+
+// GET /invoices/:id (ADMIN, STAFF)
+r.get("/:id", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: req.params.id },
+    include: {
+      customer: true,
+      subscription: {
+        include: {
+          plan: true,
+        },
+      },
+      lines: {
+        include: {
+          tax: true,
+        },
+      },
+      payments: {
+        orderBy: { paidAt: "desc" },
+      },
+      discount: true,
+    },
+  });
+
+  if (!invoice) throw notFound("Invoice not found");
+
+  ok(res, invoice);
+});
+
+// POST /invoices/:id/confirm (ADMIN, STAFF)
+r.post("/:id/confirm", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({ where: { id: req.params.id } });
+  if (!invoice) throw notFound("Invoice not found");
+
+  const allowed = INVOICE_TRANSITIONS[invoice.status as InvoiceStatus] || [];
+  if (!allowed.includes("CONFIRMED")) {
+    throw badRequest(
+      `Cannot confirm invoice in status ${invoice.status}. Allowed transitions: ${allowed.join(", ") || "none"}`
+    );
+  }
+
+  const updated = await prisma.invoice.update({
+    where: { id: req.params.id },
+    data: { status: "CONFIRMED" },
+    include: { customer: true, lines: true },
+  });
+
+  ok(res, updated);
+});
+
+// POST /invoices/:id/cancel (ADMIN, STAFF)
+r.post("/:id/cancel", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({ where: { id: req.params.id } });
+  if (!invoice) throw notFound("Invoice not found");
+
+  const allowed = INVOICE_TRANSITIONS[invoice.status as InvoiceStatus] || [];
+  if (!allowed.includes("CANCELLED")) {
+    throw badRequest(
+      `Cannot cancel invoice in status ${invoice.status}. Allowed transitions: ${allowed.join(", ") || "none"}`
+    );
+  }
+
+  const updated = await prisma.invoice.update({
+    where: { id: req.params.id },
+    data: { status: "CANCELLED" },
+    include: { customer: true, lines: true },
+  });
+
+  ok(res, updated);
+});
+
+// POST /invoices/:id/send (ADMIN, STAFF)
+r.post("/:id/send", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: req.params.id },
+    include: { customer: true },
+  });
+  if (!invoice) throw notFound("Invoice not found");
+
+  // In MVP development environment, log to console
+  console.log(`[INVOICE SENT] Invoice ${invoice.number} sent to ${invoice.customer.email}`);
+
+  ok(res, {
+    message: `Invoice ${invoice.number} sent to ${invoice.customer.email}`,
+  });
+});
+
+// GET /invoices/:id/print (ADMIN, STAFF)
+r.get("/:id/print", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: req.params.id },
+    include: {
+      customer: true,
+      subscription: { include: { plan: true } },
+      lines: { include: { tax: true } },
+      payments: true,
+      discount: true,
+    },
+  });
+
+  if (!invoice) throw notFound("Invoice not found");
+
+  ok(res, {
+    printData: {
+      ...invoice,
+      balanceDue: Math.max(0, invoice.total - invoice.amountPaid),
+      isOverdue: invoice.status === "CONFIRMED" && invoice.dueDate < new Date(),
+    },
+  });
+});
+>>>>>>> Stashed changes
 
 export default r;

@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 
 import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
@@ -205,5 +206,103 @@ r.delete(
     }
   }
 );
+=======
+// OWNER: Member 2
+import { Router } from "express";
+import { z } from "zod";
+import { prisma } from "../../db";
+import { requireAuth, requireRole } from "../../middleware/auth";
+import { notFound } from "../../utils/errors";
+import { ok, paging } from "../../utils/response";
+
+const r = Router();
+r.use(requireAuth);
+
+const createTaxSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  ratePercent: z.number().min(0, "Rate percent cannot be negative"),
+  isActive: z.boolean().optional().default(true),
+});
+
+const updateTaxSchema = z.object({
+  name: z.string().min(1).optional(),
+  ratePercent: z.number().min(0).optional(),
+  isActive: z.boolean().optional(),
+});
+
+// GET /taxes (ADMIN, STAFF)
+r.get("/", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const { page, limit, skip, take } = paging(req.query);
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+  const isActive =
+    req.query.isActive === "true" ? true : req.query.isActive === "false" ? false : undefined;
+
+  const where: any = {};
+  if (search) where.name = { contains: search };
+  if (isActive !== undefined) where.isActive = isActive;
+
+  const [total, data] = await Promise.all([
+    prisma.tax.count({ where }),
+    prisma.tax.findMany({
+      where,
+      skip,
+      take,
+      orderBy: { name: "asc" },
+    }),
+  ]);
+
+  ok(res, data, 200, { page, limit, total });
+});
+
+// POST /taxes (ADMIN)
+r.post("/", requireRole("ADMIN"), async (req, res) => {
+  const body = createTaxSchema.parse(req.body);
+
+  const tax = await prisma.tax.create({
+    data: {
+      name: body.name.trim(),
+      ratePercent: body.ratePercent,
+      isActive: body.isActive ?? true,
+    },
+  });
+
+  ok(res, tax, 201);
+});
+
+// PATCH /taxes/:id (ADMIN)
+r.patch("/:id", requireRole("ADMIN"), async (req, res) => {
+  const body = updateTaxSchema.parse(req.body);
+
+  const existing = await prisma.tax.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!existing) throw notFound("Tax not found");
+
+  const updated = await prisma.tax.update({
+    where: { id: req.params.id },
+    data: {
+      ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+      ...(body.ratePercent !== undefined ? { ratePercent: body.ratePercent } : {}),
+      ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+    },
+  });
+
+  ok(res, updated);
+});
+
+// DELETE /taxes/:id (ADMIN)
+r.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+  const existing = await prisma.tax.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!existing) throw notFound("Tax not found");
+
+  await prisma.tax.delete({
+    where: { id: req.params.id },
+  });
+
+  ok(res, { message: "Tax deleted" });
+});
+>>>>>>> Stashed changes
 
 export default r;

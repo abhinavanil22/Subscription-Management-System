@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 
 import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
@@ -364,5 +365,169 @@ r.delete(
     }
   }
 );
+=======
+// OWNER: Member 2
+import { Router } from "express";
+import { z } from "zod";
+import { prisma } from "../../db";
+import { requireAuth, requireRole } from "../../middleware/auth";
+import { badRequest, notFound } from "../../utils/errors";
+import { ok, paging } from "../../utils/response";
+
+const r = Router();
+r.use(requireAuth);
+
+const discountTypeEnum = z.enum(["FIXED", "PERCENTAGE"]);
+const discountScopeEnum = z.enum(["PRODUCT", "SUBSCRIPTION"]);
+
+const createDiscountSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  type: discountTypeEnum,
+  value: z.number().min(0, "Value cannot be negative"),
+  scope: discountScopeEnum,
+  productId: z.string().optional().nullable(),
+  subscriptionId: z.string().optional().nullable(),
+  minPurchase: z.number().min(0).optional().nullable(),
+  minQuantity: z.number().int().min(1).optional().nullable(),
+  startDate: z.string().or(z.date()).transform((val) => new Date(val)),
+  endDate: z
+    .string()
+    .or(z.date())
+    .optional()
+    .nullable()
+    .transform((val) => (val ? new Date(val) : null)),
+  usageLimit: z.number().int().min(1).optional().nullable(),
+});
+
+const updateDiscountSchema = z.object({
+  name: z.string().min(1).optional(),
+  type: discountTypeEnum.optional(),
+  value: z.number().min(0).optional(),
+  scope: discountScopeEnum.optional(),
+  productId: z.string().optional().nullable(),
+  subscriptionId: z.string().optional().nullable(),
+  minPurchase: z.number().min(0).optional().nullable(),
+  minQuantity: z.number().int().min(1).optional().nullable(),
+  startDate: z
+    .string()
+    .or(z.date())
+    .optional()
+    .transform((val) => (val ? new Date(val) : undefined)),
+  endDate: z
+    .string()
+    .or(z.date())
+    .optional()
+    .nullable()
+    .transform((val) => (val ? new Date(val) : null)),
+  usageLimit: z.number().int().min(1).optional().nullable(),
+});
+
+// GET /discounts (ADMIN, STAFF)
+r.get("/", requireRole("ADMIN", "STAFF"), async (req, res) => {
+  const { page, limit, skip, take } = paging(req.query);
+  const scope = typeof req.query.scope === "string" ? req.query.scope : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+
+  const where: any = {};
+  if (scope) where.scope = scope;
+  if (search) where.name = { contains: search };
+
+  const [total, data] = await Promise.all([
+    prisma.discount.count({ where }),
+    prisma.discount.findMany({
+      where,
+      skip,
+      take,
+      orderBy: { startDate: "desc" },
+    }),
+  ]);
+
+  ok(res, data, 200, { page, limit, total });
+});
+
+// POST /discounts (ADMIN)
+r.post("/", requireRole("ADMIN"), async (req, res) => {
+  const body = createDiscountSchema.parse(req.body);
+
+  if (body.endDate && body.endDate < body.startDate) {
+    throw badRequest("endDate cannot be before startDate");
+  }
+
+  if (body.scope === "PRODUCT" && !body.productId) {
+    throw badRequest("productId is required when scope is PRODUCT");
+  }
+
+  if (body.type === "PERCENTAGE" && body.value > 100) {
+    throw badRequest("Percentage discount cannot exceed 100%");
+  }
+
+  const discount = await prisma.discount.create({
+    data: {
+      name: body.name.trim(),
+      type: body.type,
+      value: body.value,
+      scope: body.scope,
+      productId: body.productId ?? null,
+      subscriptionId: body.subscriptionId ?? null,
+      minPurchase: body.minPurchase ?? null,
+      minQuantity: body.minQuantity ?? null,
+      startDate: body.startDate,
+      endDate: body.endDate,
+      usageLimit: body.usageLimit ?? null,
+    },
+  });
+
+  ok(res, discount, 201);
+});
+
+// PATCH /discounts/:id (ADMIN)
+r.patch("/:id", requireRole("ADMIN"), async (req, res) => {
+  const body = updateDiscountSchema.parse(req.body);
+
+  const existing = await prisma.discount.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!existing) throw notFound("Discount not found");
+
+  const start = body.startDate ?? existing.startDate;
+  const end = body.endDate !== undefined ? body.endDate : existing.endDate;
+  if (end && end < start) {
+    throw badRequest("endDate cannot be before startDate");
+  }
+
+  const updated = await prisma.discount.update({
+    where: { id: req.params.id },
+    data: {
+      ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+      ...(body.type !== undefined ? { type: body.type } : {}),
+      ...(body.value !== undefined ? { value: body.value } : {}),
+      ...(body.scope !== undefined ? { scope: body.scope } : {}),
+      ...(body.productId !== undefined ? { productId: body.productId } : {}),
+      ...(body.subscriptionId !== undefined ? { subscriptionId: body.subscriptionId } : {}),
+      ...(body.minPurchase !== undefined ? { minPurchase: body.minPurchase } : {}),
+      ...(body.minQuantity !== undefined ? { minQuantity: body.minQuantity } : {}),
+      ...(body.startDate !== undefined ? { startDate: body.startDate } : {}),
+      ...(body.endDate !== undefined ? { endDate: body.endDate } : {}),
+      ...(body.usageLimit !== undefined ? { usageLimit: body.usageLimit } : {}),
+    },
+  });
+
+  ok(res, updated);
+});
+
+// DELETE /discounts/:id (ADMIN)
+r.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+  const existing = await prisma.discount.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!existing) throw notFound("Discount not found");
+
+  await prisma.discount.delete({
+    where: { id: req.params.id },
+  });
+
+  ok(res, { message: "Discount deleted" });
+});
+>>>>>>> Stashed changes
 
 export default r;

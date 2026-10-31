@@ -14,6 +14,10 @@ prisma/*.db
 prisma/*.db-journal
 *.save
 
+# Build output
+dist/
+build/
+
 # Logs
 *.log
 
