@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Local database
+*.db
+*.db-journal
+
+# Prisma generated/local files
+prisma/*.db
+prisma/*.db-journal
+*.save
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
